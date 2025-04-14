@@ -53,13 +53,22 @@ with MCPAdapt(
 
     # Create a task
     task = Task(
-        description="Send an email to the researcher David Test that is available in the hubspot as a contact with the following text: 'Hello, I am interested in your research on hangover treatments. Can you provide more information?'",
+        description="Send an email about hangover treatments research following these steps:\n"
+            "1. Search for contact '{researcher_name}' in HubSpot using the search tool\n"
+            "2. If found, extract and use their email address directly\n"
+            "3. If not found in the first page of results, check if pagination exists and continue searching through ALL available pages\n"
+            "4. If still not found after checking ALL pagination pages, you MUST use the fallback email '{researcher_email}' provided in the input\n"
+            "5. If both the HubSpot search and fallback email fail, only then pause and ask the user to provide an email address\n"
+            "6. Once you have a valid email address, send an email with subject 'Inquiry about Hangover Treatments Research' and body: '{message}'\n"
+            "7. In your final answer, clearly state which email address was used and why (found in HubSpot or used fallback)",
         agent=agent,
-        expected_output="An email sent",
+        expected_output="An email sent with confirmation of which email address was used and why"
     )
 
-    # Create a crew
     crew = Crew(agents=[agent], tasks=[task], verbose=True)
 
-    # Run the crew
-    crew.kickoff(inputs={"email":"Send an email to the researcher david@keboola.com with the following text: 'Hello, I am interested in your research on hangover treatments. Can you provide more information?'"})
+    crew.kickoff(inputs={
+        "researcher_name": "John Doe",
+        "researcher_email": "radek.tomasek@keboola.com",
+        "message": "Hello, I am interested in your research on hangover treatments. Can you provide more information?"
+    })
