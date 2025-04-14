@@ -60,6 +60,7 @@ jobs:
           AGENT_OPENAI_API_KEY: ${{ secrets.AGENT_OPENAI_API_KEY }}
           AGENT_ANTHROPIC_API_KEY: ${{ secrets.AGENT_ANTHROPIC_API_KEY }}
           AGENT_SKILL_REGISTRY_API_KEY: ${{ secrets.AGENT_SKILL_REGISTRY_API_KEY }}
+          AGENT_SKILL_REGISTRY_TOKEN: ${{ secrets.AGENT_SKILL_REGISTRY_TOKEN }}
           GITHUB_REPOSITORY_URL: https://github.com/${{ github.repository }}
         run: |
           echo "Generating payload for agent: $AGENT_NAME..."
