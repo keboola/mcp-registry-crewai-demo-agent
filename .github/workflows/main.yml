@@ -28,7 +28,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install .
 
       - name: Prepare Branch-Specific Agent Name
         id: prep_agent_name
@@ -55,7 +55,7 @@ jobs:
           # Use the full agent name generated in the previous step
           AGENT_NAME: ${{ steps.prep_agent_name.outputs.full_agent_name }}
           AGENT_DESCRIPTION: ${{ vars.AGENT_DESCRIPTION || 'Default agent description.' }}
-          AGENT_ENTRYPOINT: ${{ vars.AGENT_ENTRYPOINT || 'skill_registry_crew/main.py' }}
+          AGENT_ENTRYPOINT: ${{ vars.AGENT_ENTRYPOINT || 'task_crew.py' }}
           # --- Pass other necessary env vars for payload generation ---
           AGENT_OPENAI_API_KEY: ${{ secrets.AGENT_OPENAI_API_KEY }}
           AGENT_ANTHROPIC_API_KEY: ${{ secrets.AGENT_ANTHROPIC_API_KEY }}
