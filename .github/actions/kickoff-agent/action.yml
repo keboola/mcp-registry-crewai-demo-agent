@@ -1,0 +1,182 @@
+name: 'Kickoff Agent Crew (Composite Action)'
+description: 'Validates and kicks off a crew on a running agent runtime.'
+
+inputs:
+  agent_name:
+    description: 'Name of the agent runtime (used for base URL, may need adjustment)'
+    required: true
+  crew_inputs_json:
+    description: 'JSON string representing the inputs object for the crew kickoff'
+    required: false
+    default: '{}'
+  runtime_token:
+    description: 'Authorization token for the Agent Runtime API'
+    required: true
+  agentic_runtime_api_url:
+    description: 'The base URL for the Agentic Runtime API'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    # Note: Steps run directly, no job setup needed within the action
+    - name: Setup Agent Runtime Environment
+      id: setup_env
+      shell: bash
+      run: |
+        # Strip 'https://' from the input URL to get the base domain
+        base_domain=$(echo "${{ inputs.agentic_runtime_api_url }}" | sed 's|^https://||')
+        # Construct the runtime base URL using agent name as subdomain
+        runtime_base_url="https://${{ inputs.agent_name }}.${base_domain}"
+        echo "AGENT_RUNTIME_BASE_URL=${runtime_base_url}" >> $GITHUB_ENV
+        # Token passed via input, set as env var for subsequent steps
+        echo "RUNTIME_TOKEN=${{ inputs.runtime_token }}" >> $GITHUB_ENV
+        echo "Runtime Base URL set to: ${runtime_base_url}" # Add logging
+
+    - name: Validate Agent
+      shell: bash
+      # Remove env block here, use GITHUB_ENV from previous step
+      run: |
+        # Use the base URL set in the setup step
+        VALIDATE_URL="${AGENT_RUNTIME_BASE_URL}/agent/validate"
+        echo "Validating agent at ${VALIDATE_URL}..."
+        validation_response=$(curl -fsS -H "Authorization: Bearer ${RUNTIME_TOKEN}" "${VALIDATE_URL}")
+        curl_exit_code=$?
+
+        # Check if curl itself failed (e.g., network error)
+        if [ $curl_exit_code -ne 0 ]; then
+          echo "::error::Agent validation request failed"
+          exit 1
+        fi
+
+        # Check if the 'errors' field is present and not an empty array
+        errors=$(echo "$validation_response" | jq -e -r '.errors')
+        jq_exit_code=$?
+        if [ $jq_exit_code -ne 0 ]; then
+          echo "::error::Agent validation failed with errors: $errors"
+          exit 1
+        fi
+        echo "Agent validation successful (no errors found)."
+
+    - name: List Crews and Get First Crew ID
+      id: list_crews
+      shell: bash
+      # Remove env block here
+      run: |
+        # Use the base URL set in the setup step
+        LIST_CREWS_URL="${AGENT_RUNTIME_BASE_URL}/list-crews"
+        echo "Listing crews from ${LIST_CREWS_URL}..."
+        CREW_ID=$(curl -fsS -H "Authorization: Bearer ${RUNTIME_TOKEN}" "${LIST_CREWS_URL}" | jq -r '.crews.[0]')
+        curl_exit_code=$?
+        if [ $curl_exit_code -ne 0 ]; then
+          echo "::error::Failed to list crews (curl exit code: $curl_exit_code)."
+          exit 1
+        fi
+
+        if [ -z "$CREW_ID" ] || [ "$CREW_ID" == "null" ]; then
+          echo "::error::Could not get Crew ID from the first crew listed."
+          exit 1
+        fi
+        echo "Found Crew ID: $CREW_ID"
+        # Use GITHUB_OUTPUT for action outputs
+        echo "crew_id=$CREW_ID" >> $GITHUB_OUTPUT
+
+    - name: Generate Kickoff Payload
+      id: generate_kickoff
+      shell: bash
+      # Access output from previous step using steps context
+      run: |
+        echo "Generating kickoff payload from inputs: ${{ inputs.crew_inputs_json }}"
+        jq -n --arg crew "${{ steps.list_crews.outputs.crew_id }}" \
+              --argjson inputs '${{ inputs.crew_inputs_json }}' \
+              '{crew: $crew, inputs: $inputs}' > kickoff_payload.json
+
+        echo "Generated kickoff payload:"
+        cat kickoff_payload.json
+
+    - name: Kickoff Crew
+      id: kickoff_crew
+      shell: bash
+      # Remove env block here
+      run: |
+        CREW_ID="${{ steps.list_crews.outputs.crew_id }}"
+        # Use the base URL set in the setup step
+        KICKOFF_URL="${AGENT_RUNTIME_BASE_URL}/kickoff"
+        echo "Kicking off crew ${CREW_ID} at ${KICKOFF_URL}..."
+        curl -fsS -X POST "${KICKOFF_URL}" \
+          -H "Authorization: Bearer ${RUNTIME_TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d @kickoff_payload.json -o kickoff_response.json
+
+        curl_exit_code=$?
+        if [ $curl_exit_code -ne 0 ]; then
+          echo "::error::Crew kickoff failed (curl exit code: $curl_exit_code)."
+          # Optionally display response if available
+          if [ -f kickoff_response.json ]; then cat kickoff_response.json; fi
+          exit 1
+        fi
+
+        echo "Crew kickoff request successful. Response:"
+        cat kickoff_response.json
+        # Output the response content
+        echo "response=$(cat kickoff_response.json | jq -c .)" >> $GITHUB_OUTPUT
+
+    - name: Check Run Status with Polling
+      shell: bash
+      # Remove env block here
+      run: |
+        echo "Checking run status with polling..."
+        run_id=$(echo '${{ steps.kickoff_crew.outputs.response }}' | jq -e -r '.run_id')
+        jq_exit_code=$?
+        if [ $jq_exit_code -ne 0 ] || [ -z "$run_id" ] || [ "$run_id" == "null" ]; then
+          echo "::error::Could not extract run_id from kickoff response: ${{ steps.kickoff_crew.outputs.response }}"
+          exit 1
+        fi
+        echo "Found run_id: $run_id"
+
+        # Polling parameters
+        POLL_INTERVAL=5 # seconds
+        TIMEOUT_SECONDS=300 # 5 minutes
+        end_time=$((SECONDS + TIMEOUT_SECONDS))
+
+        # Use the base URL set in the setup step
+        RUN_STATUS_URL="${AGENT_RUNTIME_BASE_URL}/runs/$run_id"
+
+        while [ $SECONDS -lt $end_time ]; do
+          echo "Polling status for run $run_id from ${RUN_STATUS_URL} ..."
+          run_status_response=$(curl -fsS -H "Authorization: Bearer ${RUNTIME_TOKEN}" "${RUN_STATUS_URL}")
+          curl_exit_code=$?
+
+          # Check for curl errors
+          if [ $curl_exit_code -ne 0 ]; then
+            echo "::error::Failed to fetch run status for run_id $run_id (curl exit code: $curl_exit_code). Response: $run_status_response"
+            exit 1
+          fi
+          echo "Run status response: $run_status_response"
+
+          # Check the status field
+          # Extract .status value. jq -e exits 0 if value is not null/false.
+          current_status=$(echo "$run_status_response" | jq -e -r '.status')
+          jq_status_exit_code=$?
+          echo "Current status: $current_status, code $jq_status_exit_code"
+
+          if [ $jq_status_exit_code -ne 0 ]; then
+            echo "::warning::Could not extract .status field from response: $run_status_response"
+            # Decide how to handle missing status - maybe retry or fail? Retrying for now.
+          elif [ "$current_status" == "completed" ]; then
+            echo "Run completed successfully!"
+            exit 0 # Success
+          elif [ "$current_status" == "failed" ]; then
+             # Handle explicit 'failed' status if API uses it
+             echo "::error::Run status is 'failed'. (Full Response: $run_status_response)"
+             exit 1
+          else
+            echo "Current status: '$current_status'. Waiting ${POLL_INTERVAL} seconds..."
+          fi
+
+          sleep $POLL_INTERVAL
+        done
+
+        # If the loop finishes, it means timeout was reached
+        echo "::error::Timeout: Run $run_id did not reach 'completed' status after ${TIMEOUT_SECONDS} seconds."
+        exit 1 
