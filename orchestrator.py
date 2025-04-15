@@ -17,12 +17,11 @@ logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel
 
-
 class NoteExtractionModel(BaseModel):
-    name: str
-    email: str
-    opportunity_name: str
-    value: str
+    note: str
+    researcher_name: str
+    researcher_email: str
+    message: str
 
 
 @CrewBase
@@ -88,6 +87,17 @@ class LeadManagementCrew:
                 pass
 
     @agent
+    def research_email_agent(self) -> Agent:
+        return Agent(
+            role="Research Email Sender",
+            goal="Send emails",
+            backstory="You help sending emails to researchers",
+            verbose=True,
+            tools=self.mcp_tools,
+        )
+
+
+    @agent
     def note_parser_agent(self) -> Agent:
         """Creates a research agent for gathering information"""
         return Agent(
@@ -112,6 +122,7 @@ class LeadManagementCrew:
     def note_parser_task(self) -> Task:
         """Creates a research task for the given topic"""
         # Get topic from inputs
+        print(f"Inputs: {self.inputs}")
         note = (
             self.inputs.get("note") if hasattr(self, "inputs") and self.inputs else None
         )
@@ -145,6 +156,50 @@ class LeadManagementCrew:
             context=[self.note_parser_task()],
         )
 
+    @task
+    def research_email_task(self) -> Task:
+        """Creates a research task for the given topic"""
+        # Get topic from inputs
+        if self.inputs.get("researcher_name"):
+            researcher_name = self.inputs.get("researcher_name")
+        else:
+            raise ValueError("researcher_name is required for research_email_task")
+
+
+        if self.inputs.get("researcher_email"):
+            researcher_email = self.inputs.get("researcher_email")
+        else:
+            raise ValueError("researcher_email is required for research_email_task")
+
+
+        if self.inputs.get("message"):
+            message = self.inputs.get("message")
+        else:
+            raise ValueError("message is required for research_email_task")
+
+        return Task(
+            description="Send an email about hangover treatments research following these steps:\n"
+                f"1. Search for contact '{researcher_name}' in HubSpot using the search tool\n"
+                "2. If found, extract and use their email address directly\n"
+                "3. If not found in the first page of results, check if pagination exists and continue searching through ALL available pages\n"
+                f"4. If still not found after checking ALL pagination pages, you MUST use the fallback email '{researcher_email}' provided in the input\n"
+                "5. If both the HubSpot search and fallback email fail, only then pause and ask the user to provide an email address\n"
+                f"6. Once you have a valid email address, send an email with subject 'Inquiry about Hangover Treatments Research' and body: '{message}'\n"
+                "7. In your final answer, clearly state which email address was used and why (found in HubSpot or used fallback)",
+            agent=self.research_email_agent(),
+            expected_output="An email sent with confirmation of which email address was used and why"
+        )
+
+
+    @crew 
+    def research_email_crew(self) -> Crew:
+        return Crew(
+            agents=[self.research_email_agent()],
+            tasks=[self.research_email_task()],
+            verbose=True,
+            process=Process.sequential,
+        )
+
     @crew
     def lead_management_crew(self) -> Crew:
         """Creates the lead management crew with note parsing and Hubspot integration"""
@@ -152,6 +207,25 @@ class LeadManagementCrew:
         note = (
             self.inputs.get("note") if hasattr(self, "inputs") and self.inputs else None
         )
+        # Get topic from inputs
+        if self.inputs.get("researcher_name"):
+            researcher_name = self.inputs.get("researcher_name")
+        else:
+            raise ValueError("researcher_name is required for research_email_task")
+
+
+        if self.inputs.get("researcher_email"):
+            researcher_email = self.inputs.get("researcher_email")
+        else:
+            raise ValueError("researcher_email is required for research_email_task")
+
+
+        if self.inputs.get("message"):
+            message = self.inputs.get("message")
+        else:
+            raise ValueError("message is required for research_email_tasks")
+
+
         logger.info(f"Initialising crew with note: {note}")
 
         return Crew(

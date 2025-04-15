@@ -170,7 +170,10 @@ jobs:
     runs-on: ubuntu-latest
     # Define CREW_INPUT_ vars needed for JSON generation
     env:
-      CREW_INPUT_TOPIC: ${{ vars.CREW_INPUT_TOPIC || 'Default Topic from CI' }}
+      CREW_INPUT_NOTE: ${{ vars.CREW_INPUT_NOTE || 'Default Note from CI' }}
+      CREW_INPUT_RESEARCHER_NAME: ${{ vars.CREW_INPUT_RESEARCHER_NAME || 'Default Researcher Name from CI' }}
+      CREW_INPUT_RESEARCHER_EMAIL: ${{ vars.CREW_INPUT_RESEARCHER_EMAIL || 'Default Researcher Email from CI' }}
+      CREW_INPUT_MESSAGE: ${{ vars.CREW_INPUT_MESSAGE || 'Default Message from CIs' }}
       # Add other CREW_INPUT_ vars/secrets here
     steps:
       - uses: actions/checkout@v3 # Checkout repository code first
@@ -179,14 +182,13 @@ jobs:
         id: crew_inputs
         run: |
           echo "Generating crew inputs JSON..."
-          inputs_json=$(jq -n '{}') # Start with empty JSON object
-          env | grep '^CREW_INPUT_' | while IFS='=' read -r key value; do
-            input_name="${key#CREW_INPUT_}"
-            inputs_json=$(echo "$inputs_json" | jq --arg name "$input_name" --arg value "$value" '. += {($name): $value}')
-          done
+          # Use env, grep, sed, and jq to build the JSON object directly
+          # This avoids the subshell variable scope issue from the previous while loop approach
+          # Use ascii_downcase in jq to ensure the keys are lowercase.
+          inputs_json=$(env | grep '^CREW_INPUT_' | sed 's/^CREW_INPUT_//' | jq -R 'split("=") | {(.[0] | ascii_downcase): .[1]}' | jq -sc 'add // {}')
           echo "Generated JSON: $inputs_json"
-          # Ensure output is compact JSON for single line passing
-          inputs_json=$(echo "$inputs_json" | jq -c .)
+          # Ensure output is compact JSON for single line passing (already done by -c in the last jq command)
+          # Adding ' // {}' to handle the case where no CREW_INPUT_ vars are found, ensuring valid JSON output.
           echo "json_string=$inputs_json" >> $GITHUB_OUTPUT
 
       - name: Call Kickoff Action
