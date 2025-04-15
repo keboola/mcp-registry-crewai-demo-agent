@@ -1,0 +1,203 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+# Define environment variables for this job
+env:
+  AGENTIC_RUNTIME_API_URL: ${{ vars.AGENTIC_RUNTIME_API_URL }}
+
+jobs:
+  # --- First Job: Build and Deploy Agent ---
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # fetch full history
+          ref: ${{ github.ref }}  # check out the actual ref
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+
+      - name: Prepare Branch-Specific Agent Name
+        id: prep_agent_name
+        env:
+          BASE_AGENT_NAME: ${{ vars.AGENT_NAME || 'your-lowecase-agent-name' }}
+          BRANCH_NAME: ${{ github.ref_name }}
+        run: |
+          # Sanitize branch name: lowercase, replace / with -, remove other non-alphanumeric
+          sanitized_branch=$(echo "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed -e 's|/|-|g' -e 's|[^a-z0-9-]||g')
+          # Truncate if too long (adjust max length if needed)
+          sanitized_branch=${sanitized_branch:0:20}
+          # Construct full name
+          full_agent_name="$BASE_AGENT_NAME-$sanitized_branch"
+          echo "Full agent name: $full_agent_name"
+          echo "full_agent_name=$full_agent_name" >> $GITHUB_OUTPUT
+
+      - name: Run CrewAI Agent (Example)
+        run: |
+          echo "CrewAI agent setup complete. Add specific run/test commands here."
+
+      - name: Generate Payload
+        id: generate_payload
+        env:
+          # Use the full agent name generated in the previous step
+          AGENT_NAME: ${{ steps.prep_agent_name.outputs.full_agent_name }}
+          AGENT_DESCRIPTION: ${{ vars.AGENT_DESCRIPTION || 'Default agent description.' }}
+          AGENT_ENTRYPOINT: ${{ vars.AGENT_ENTRYPOINT || 'task_crew.py' }}
+          # --- Pass other necessary env vars for payload generation ---
+          AGENT_OPENAI_API_KEY: ${{ secrets.AGENT_OPENAI_API_KEY }}
+          AGENT_ANTHROPIC_API_KEY: ${{ secrets.AGENT_ANTHROPIC_API_KEY }}
+          AGENT_SKILL_REGISTRY_API_KEY: ${{ secrets.AGENT_SKILL_REGISTRY_API_KEY }}
+          AGENT_SKILL_REGISTRY_TOKEN: ${{ secrets.AGENT_SKILL_REGISTRY_TOKEN }}
+          GITHUB_REPOSITORY_URL: https://github.com/${{ github.repository }}
+        run: |
+          echo "Generating payload for agent: $AGENT_NAME..."
+          BRANCH_NAME=${GITHUB_HEAD_REF##*/}
+          # jq uses AGENT_NAME directly from env
+          jq -n --arg name "$AGENT_NAME" \
+                --arg description "$AGENT_DESCRIPTION" \
+                --arg entrypoint "$AGENT_ENTRYPOINT" \
+                --arg repo_url "$GITHUB_REPOSITORY_URL" \
+                --arg branch "$BRANCH_NAME" \
+                '{name: $name, description: $description, entrypoint: $entrypoint, codeSource: {type: "git", gitRepo: {url: $repo_url, branch: $branch}}, envVars: []}' > generated_payload.json
+          env | grep '^AGENT_' | while IFS='=' read -r key value; do
+            var_name="${key#AGENT_}"
+            # Skip adding AGENT_NAME itself to envVars array
+            if [ "$var_name" == "NAME" ]; then continue; fi 
+            if [[ "$var_name" =~ (TOKEN|KEY|SECRET|PASSWORD) ]]; then secure_flag=true; else secure_flag=false; fi
+            jq --arg name "$var_name" --arg value "$value" --argjson secure "$secure_flag" \
+              '.envVars += [{"name": $name, "value": $value, "secure": $secure}]' \
+              generated_payload.json > temp_payload.json && mv temp_payload.json generated_payload.json
+          done
+          echo "Generated payload:"
+          cat generated_payload.json
+
+      - name: Check if Agent Runtime Exists
+        id: check_runtime
+        env:
+          # Use the full agent name generated earlier
+          AGENT_NAME: ${{ steps.prep_agent_name.outputs.full_agent_name }}
+          KBC_AUTHORIZATION_TOKEN: ${{ secrets.KBC_AUTHORIZATION_TOKEN }}
+        run: |
+          echo "Checking if runtime '$AGENT_NAME' exists..."
+          http_code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $KBC_AUTHORIZATION_TOKEN" \
+            "${{ env.AGENTIC_RUNTIME_API_URL }}/api/runtimes/${AGENT_NAME}")
+          if [ "$http_code" -eq 200 ]; then
+            echo "Runtime '$AGENT_NAME' exists."
+            echo "exists=true" >> $GITHUB_OUTPUT
+          elif [ "$http_code" -eq 404 ]; then
+            echo "Runtime '$AGENT_NAME' does not exist."
+            echo "exists=false" >> $GITHUB_OUTPUT
+          else
+            echo "::error::Unexpected HTTP status code $http_code when checking runtime existence."
+            exit 1
+          fi
+
+      - name: Delete Agent Runtime (if exists)
+        if: steps.check_runtime.outputs.exists == 'true'
+        env:
+          # Use the full agent name generated earlier
+          AGENT_NAME: ${{ steps.prep_agent_name.outputs.full_agent_name }}
+          KBC_AUTHORIZATION_TOKEN: ${{ secrets.KBC_AUTHORIZATION_TOKEN }}
+        run: |
+          echo "Deleting existing agent runtime '$AGENT_NAME'..."
+          # Use -fsS but ignore 404 if it was already gone
+          http_code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $KBC_AUTHORIZATION_TOKEN" \
+            -X DELETE \
+            "${{ env.AGENTIC_RUNTIME_API_URL }}/api/runtimes/${AGENT_NAME}")
+          if [ "$http_code" -ne 204 ] && [ "$http_code" -ne 404 ]; then
+            echo "::error::Failed to delete agent runtime '$AGENT_NAME', received HTTP status $http_code."
+            exit 1
+          else
+            echo "Existing runtime '$AGENT_NAME' deleted or already gone (HTTP $http_code)."
+            # Optional: Wait a moment for delete operation to fully settle
+            sleep 5
+          fi
+
+      - name: Create Agent Runtime
+        # Create step now uses the payload generated with the full agent name
+        env:
+          KBC_AUTHORIZATION_TOKEN: ${{ secrets.KBC_AUTHORIZATION_TOKEN }}
+        run: |
+          # Note: generated_payload.json already contains the correct full agent name
+          echo "Creating agent runtime..."
+          curl -fsS -X POST ${{ env.AGENTIC_RUNTIME_API_URL }}/api/runtimes \
+            -H "Authorization: Bearer $KBC_AUTHORIZATION_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d @generated_payload.json
+          if [ $? -ne 0 ]; then echo "::error::Failed to create agent runtime."; exit 1; fi
+          echo "Agent runtime creation initiated."
+
+      - name: Wait for Agent Runtime to be Ready
+        env:
+          # Use the full agent name generated earlier
+          AGENT_NAME: ${{ steps.prep_agent_name.outputs.full_agent_name }}
+          KBC_AUTHORIZATION_TOKEN: ${{ secrets.KBC_AUTHORIZATION_TOKEN }}
+        run: |
+          echo "Waiting for agent runtime '$AGENT_NAME' to become ready..."
+          ready=false; timeout=30; delay=15
+          for (( i=1; i<=$timeout; i++ )); do
+            echo "Attempt $i/$timeout: Checking status..."
+            status_response=$(curl -fsS --fail -H "Authorization: Bearer $KBC_AUTHORIZATION_TOKEN" \
+              "${{ env.AGENTIC_RUNTIME_API_URL }}/api/runtimes/${AGENT_NAME}")
+            if [ $? -ne 0 ]; then echo "::error::Failed to get runtime status for $AGENT_NAME."; exit 1; fi
+            current_status=$(echo "$status_response" | jq -r '.status.phase')
+            echo "Current status: $current_status"
+            if [ "$current_status" == "Running" ]; then ready=true; echo "Agent runtime '$AGENT_NAME' is ready."; break; fi
+            if [ $i -lt $timeout ]; then echo "Runtime not ready yet. Waiting $delay seconds..."; sleep $delay; fi
+          done
+          if [ "$ready" = false ]; then echo "::error::Timeout: Agent runtime '$AGENT_NAME' did not become ready after $(($timeout * $delay)) seconds."; exit 1; fi
+    # Output the full agent name for use in subsequent jobs
+    outputs:
+      full_agent_name: ${{ steps.prep_agent_name.outputs.full_agent_name }}
+
+  # --- Second Job: Trigger Kickoff Workflow --- 
+  trigger_kickoff:
+    needs: build # Depends on the build job succeeding
+    # Only run this job on pushes to the main branch
+    runs-on: ubuntu-latest
+    # Define CREW_INPUT_ vars needed for JSON generation
+    env:
+      CREW_INPUT_NOTE: ${{ vars.CREW_INPUT_NOTE || 'Default Note from CI' }}
+      CREW_INPUT_RESEARCHER_NAME: ${{ vars.CREW_INPUT_RESEARCHER_NAME || 'Default Researcher Name from CI' }}
+      CREW_INPUT_RESEARCHER_EMAIL: ${{ vars.CREW_INPUT_RESEARCHER_EMAIL || 'Default Researcher Email from CI' }}
+      CREW_INPUT_MESSAGE: ${{ vars.CREW_INPUT_MESSAGE || 'Default Message from CIs' }}
+      # Add other CREW_INPUT_ vars/secrets here
+    steps:
+      - uses: actions/checkout@v3 # Checkout repository code first
+
+      - name: Generate Crew Inputs JSON
+        id: crew_inputs
+        run: |
+          echo "Generating crew inputs JSON..."
+          # Use env, grep, sed, and jq to build the JSON object directly
+          # This avoids the subshell variable scope issue from the previous while loop approach
+          # Use ascii_downcase in jq to ensure the keys are lowercase.
+          inputs_json=$(env | grep '^CREW_INPUT_' | sed 's/^CREW_INPUT_//' | jq -R 'split("=") | {(.[0] | ascii_downcase): .[1]}' | jq -sc 'add // {}')
+          echo "Generated JSON: $inputs_json"
+          # Ensure output is compact JSON for single line passing (already done by -c in the last jq command)
+          # Adding ' // {}' to handle the case where no CREW_INPUT_ vars are found, ensuring valid JSON output.
+          echo "json_string=$inputs_json" >> $GITHUB_OUTPUT
+
+      - name: Call Kickoff Action
+        uses: ./.github/actions/kickoff-agent # Use the composite action
+        with:
+          # Use the full agent name output from the build job
+          agent_name: ${{ needs.build.outputs.full_agent_name }}
+          agentic_runtime_api_url: ${{ vars.AGENTIC_RUNTIME_API_URL }}
+          crew_inputs_json: ${{ steps.crew_inputs.outputs.json_string }} # Use generated JSON string
+          runtime_token: ${{ secrets.KBC_AUTHORIZATION_TOKEN }} # Pass token as input
+          # Pass the target crew name from variables (or default to empty)
+          target_crew_name: ${{ vars.TARGET_CREW_NAME || '' }} 

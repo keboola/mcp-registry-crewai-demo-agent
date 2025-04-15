@@ -10,3 +10,8 @@ dependencies = [
     "mcpadapt>=0.1.0",
     "keboola.skill_registry_mcp>=0.0.8",
 ]
+
+[tool.setuptools]
+# Explicitly declare the Python module(s) at the root level
+# to resolve ambiguity for the build process.
+py-modules = ["task_crew"]
