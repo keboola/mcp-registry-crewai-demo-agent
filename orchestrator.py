@@ -10,27 +10,14 @@ from mcpadapt.core import MCPAdapt
 from mcpadapt.crewai_adapter import CrewAIAdapter
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
-from pydantic import BaseModel
-
-
-class NoteExtractionModel(BaseModel):
-    name: str
-    email: str
-    opportunity_name: str
-    value: str
-
-
 @CrewBase
-class LeadManagementCrew:
-    """Lead management crew for handling sales leads from sales person notes"""
+class EmailResearchCrew:
+    """Email research crew for finding contacts and sending emails"""
 
     def __init__(self, inputs=None):
-        """Initialize the crew with inputs"""
+        """Initialize the crew with inputs and MCP connection"""
 
         skill_registry_token = os.getenv("SKILL_REGISTRY_TOKEN")
         if not skill_registry_token:
@@ -41,9 +28,9 @@ class LeadManagementCrew:
                 "OPENAI_API_KEY is not set. Create a .env file at the root of the project with OPENAI_API_KEY=<your-api-key>"
             )
 
-        print("Starting MCP connection with correct executable...")
+        print("Starting MCP connection for EmailResearchCrew...")
 
-        mcp_adapt = MCPAdapt(
+        self._mcp_adapt_email = MCPAdapt( 
             StdioServerParameters(
                 command="uvx",
                 args=[
@@ -66,97 +53,82 @@ class LeadManagementCrew:
             CrewAIAdapter(),
         )
 
-        print("Attempting to connect to MCP server...")
-        self.mcp_tools = mcp_adapt.__enter__()
-        print("Successfully connected to MCP server!")
+        print("Attempting to connect to MCP server for EmailResearchCrew...")
+        self.mcp_tools = self._mcp_adapt_email.__enter__()
+        print("Successfully connected to MCP server for EmailResearchCrew!")
 
         # Print available tools for debugging
-        print("Available tools:")
+        print("Available tools for EmailResearchCrew:")
         for tool in self.mcp_tools:
             print(f"- {tool.name}: {tool.description}")
 
         self.inputs = inputs or {}
-        logger.info(f"ContentCreationCrew initialized with inputs: {self.inputs}")
+        logger.info(f"EmailResearchCrew initialized with inputs: {self.inputs}")
 
     def __del__(self):
         "Ensure MCP Adapter is properly closed on object destruction"
-        if hasattr(self, "_mcp_adapt"):
+        if hasattr(self, "_mcp_adapt_email"):
             try:
-                self._mcp_adapt.__exit__(None, None, None)
+                self._mcp_adapt_email.__exit__(None, None, None)
             except RuntimeError:
                 # Ignore 'Cannot close a running event loop' errors
                 pass
 
     @agent
-    def note_parser_agent(self) -> Agent:
-        """Creates a research agent for gathering information"""
+    def research_email_agent(self) -> Agent:
         return Agent(
-            role="Note Parser",
-            goal="Extract contact name, email, opportunity name and value from unstructured sales notes",
-            backstory="Expert in analyzing free-text notes and turning them into structured CRM-ready data.",
-            verbose=True,
-        )
-
-    @agent
-    def hubspot_agent(self) -> Agent:
-        """Creates an agent for managing Hubspot CRM operations"""
-        return Agent(
-            role="Hubspot CRM Manager",
-            goal="Create contacts in Hubspot if they don't exist and then create opportunities",
-            backstory="Expert in CRM operations who ensures leads are properly tracked in Hubspot",
+            role="Research Email Sender",
+            goal="Find contact emails and send emails",
+            backstory="You are an expert in finding contact information within HubSpot and sending emails. The schema contains limit as integer not string",
             verbose=True,
             tools=self.mcp_tools,
         )
 
     @task
-    def note_parser_task(self) -> Task:
-        """Creates a research task for the given topic"""
-        # Get topic from inputs
-        note = (
-            self.inputs.get("note") if hasattr(self, "inputs") and self.inputs else None
-        )
+    def research_email_task(self) -> Task:
+        """Creates a research task for finding and sending an email"""
+        # Get inputs specific to this task
+        researcher_name = self.inputs.get("researcher_name")
+        researcher_email = self.inputs.get("researcher_email")
+        message = self.inputs.get("message")
 
-        if not note:
-            raise ValueError("Note is required for note_parser_task")
+        # Validate required inputs for this task
+        if not researcher_name:
+            raise ValueError("researcher_name is required for research_email_task")
+        if not researcher_email:
+            raise ValueError("researcher_email (fallback) is required for research_email_task")
+        if not message:
+            raise ValueError("message is required for research_email_task")
+
+        print(f"EmailResearchCrew Inputs: Name='{researcher_name}', Fallback='{researcher_email}', Msg='{message[:20]}...'")
+
+        # Use triple quotes for the multi-line description string for clarity and robustness
+        description_string = f"""Send an email about hangover treatments research following these steps:
+1. Search for contact '{researcher_name}' in HubSpot using the search tool (e.g., 'radekdemo').
+   **IMPORTANT TOOL USAGE:** When calling the search tool, provide the arguments as a single JSON **string** representing the parameters directly.
+   For example: '"limit": 10, "properties": "email"'. Do **not** nest these parameters inside another key like 'properties'.
+2. If found, extract and use their email address directly
+3. If not found in the first page of results, check if pagination exists and continue searching through ALL available pages
+4. If still not found after checking ALL pagination pages, you MUST use the fallback email '{researcher_email}' provided in the input
+5. If both the HubSpot search and fallback email fail, only then pause and ask the user to provide an email address
+6. Once you have a valid email address, send an email with subject 'Inquiry about Hangover Treatments Research' and body: '{message}'
+7. In your final answer, clearly state which email address was used and why (found in HubSpot or used fallback)
+"""
 
         return Task(
-            description=(
-                f'Extract structured lead information from the following sales note:\n\n"{note}"\n\n'
-                f"Return only the structured data as requested."
-            ),
-            expected_output="Extracted lead info with name, email, opportunity_name, and value.",
-            agent=self.note_parser_agent(),
-            output_json=NoteExtractionModel,
-        )
-
-    @task
-    def hubspot_task(self) -> Task:
-        """Creates a task for Hubspot CRM operations"""
-        return Task(
-            description=(
-                "Using the extracted lead information, perform the following steps:\n"
-                "1. Check if the contact already exists in Hubspot using their email\n"
-                "2. If the contact doesn't exist, create a new contact with their name and email\n"
-                "3. Create a new opportunity/deal for the contact with the opportunity name and value\n"
-                "4. Return the IDs of the created or existing contact and the new opportunity"
-            ),
-            expected_output="Hubspot contact ID and opportunity ID",
-            agent=self.hubspot_agent(),
-            context=[self.note_parser_task()],
+            description=description_string,
+            agent=self.research_email_agent(),
+            expected_output="An email sent with confirmation of which email address was used and why"
         )
 
     @crew
-    def lead_management_crew(self) -> Crew:
-        """Creates the lead management crew with note parsing and Hubspot integration"""
-        # Log the topic being used
-        note = (
-            self.inputs.get("note") if hasattr(self, "inputs") and self.inputs else None
-        )
-        logger.info(f"Initialising crew with note: {note}")
+    def research_email_crew(self) -> Crew:
+        """Creates the email research and sending crew"""
+        logger.info(f"Initialising email research crew with inputs: {self.inputs}")
 
         return Crew(
-            agents=[self.note_parser_agent(), self.hubspot_agent()],
-            tasks=[self.note_parser_task(), self.hubspot_task()],
+            agents=[self.research_email_agent()],
+            tasks=[self.research_email_task()],
             verbose=True,
             process=Process.sequential,
         )
