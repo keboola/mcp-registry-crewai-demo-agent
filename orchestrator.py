@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Dict
 
 from crewai import Agent, Crew, Process, Task
+from crewai import LLM
 from crewai.project import CrewBase, agent, crew, task
 from mcp import StdioServerParameters
 from mcpadapt.core import MCPAdapt
@@ -78,6 +79,11 @@ class LeadManagementCrew:
         self.inputs = inputs or {}
         logger.info(f"ContentCreationCrew initialized with inputs: {self.inputs}")
 
+        self.llm = LLM(
+            model="openai/gpt-4o",  # call model by provider/model_name
+            temperature=0.1
+        )
+
     def __del__(self):
         "Ensure MCP Adapter is properly closed on object destruction"
         if hasattr(self, "_mcp_adapt"):
@@ -95,6 +101,7 @@ class LeadManagementCrew:
             goal="Extract contact name, email, opportunity name and value from unstructured sales notes",
             backstory="Expert in analyzing free-text notes and turning them into structured CRM-ready data.",
             verbose=True,
+            llm=self.llm,
         )
 
     @agent
@@ -106,6 +113,7 @@ class LeadManagementCrew:
             backstory="Expert in CRM operations who ensures leads are properly tracked in Hubspot",
             verbose=True,
             tools=self.mcp_tools,
+            llm=self.llm,
         )
 
     @task
