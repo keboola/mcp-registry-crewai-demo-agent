@@ -43,7 +43,7 @@ jobs:
         run: |
           # Determine the correct branch name based on the event
           if [ "$GH_EVENT_NAME" == "pull_request" ]; then
-            BRANCH_NAME="$GH_HEAD_REF" # e.g., feature/branch-name
+            BRANCH_NAME=${GITHUB_HEAD_REF##*/}
             echo "Event is pull_request, using head_ref: $BRANCH_NAME"
           else
             # For non-pull_request events (like push)
@@ -52,7 +52,7 @@ jobs:
               echo "Event is $GH_EVENT_NAME to main branch, using ref_name: $BRANCH_NAME"
             else
               # Push to other branches, tags, etc.
-              BRANCH_NAME="$GH_REF_NAME"
+              BRANCH_NAME=${GITHUB_HEAD_REF##*/}
               echo "Event is $GH_EVENT_NAME to non-main ref, using ref_name: $BRANCH_NAME"
             fi
           fi
@@ -65,6 +65,7 @@ jobs:
           full_agent_name="$BASE_AGENT_NAME-$sanitized_branch"
           echo "Full agent name: $full_agent_name"
           echo "full_agent_name=$full_agent_name" >> $GITHUB_OUTPUT
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
 
       - name: Run CrewAI Agent (Example)
         run: |
@@ -85,13 +86,12 @@ jobs:
           GITHUB_REPOSITORY_URL: https://github.com/${{ github.repository }}
         run: |
           echo "Generating payload for agent: $AGENT_NAME..."
-          BRANCH_NAME=${GITHUB_HEAD_REF##*/}
           # jq uses AGENT_NAME directly from env
           jq -n --arg name "$AGENT_NAME" \
                 --arg description "$AGENT_DESCRIPTION" \
                 --arg entrypoint "$AGENT_ENTRYPOINT" \
                 --arg repo_url "$GITHUB_REPOSITORY_URL" \
-                --arg branch "$BRANCH_NAME" \
+                --arg branch "${{ steps.prep_agent_name.outputs.branch_name }}" \
                 '{name: $name, description: $description, entrypoint: $entrypoint, codeSource: {type: "git", gitRepo: {url: $repo_url, branch: $branch}}, envVars: []}' > generated_payload.json
           env | grep '^AGENT_' | while IFS='=' read -r key value; do
             var_name="${key#AGENT_}"
@@ -242,6 +242,7 @@ jobs:
           full_agent_name="$BASE_AGENT_NAME-$sanitized_branch"
           echo "Full agent name: $full_agent_name"
           echo "full_agent_name=$full_agent_name" >> $GITHUB_OUTPUT
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
 
       - name: Delete Agent Runtime for Merged Branch
         env:
