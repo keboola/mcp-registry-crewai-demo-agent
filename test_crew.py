@@ -2,7 +2,8 @@ import os
 
 from dotenv import load_dotenv
 
-from orchestrator import LeadManagementCrew
+# Import both crew classes
+from orchestrator import  EmailResearchCrew
 
 
 def main():
@@ -20,26 +21,32 @@ def main():
             "SKILL_REGISTRY_TOKEN is not set. Add it to your .env file."
         )
 
-    # Sample sales note - you can replace this with user input or data from another source
-    sample_note = """
-    Had a great meeting with John Smith (john.smith@example.com) today. 
-    He's interested in our enterprise solution for his company. 
-    The opportunity is for a full platform implementation worth about $75,000.
-    Will follow up next week to discuss details.
-    """
+    # --- Inputs for Email Research Crew ---
+    researcher_name_for_email = "Radek Tomasek" # Example name for email search
+    researcher_email_fallback = "martin.vasko@keboola.com" # Example fallback email
+    message_for_email = "Hello, I am interested in your latest publication on AI ethics. Could we connect?" # Example message
 
-    # Initialize the crew with the sample note
-    crew = LeadManagementCrew(inputs={"note": sample_note})
 
-    # Run the crew
-    print("Starting Lead Management process...")
-    result = crew.lead_management_crew().kickoff()
+    # --- Initialize Email Research Crew ---
+    print("Initializing Email Research Crew...")
+    email_crew = EmailResearchCrew(
+         inputs={
+            "researcher_name": researcher_name_for_email,
+            "researcher_email": researcher_email_fallback,
+            "message": message_for_email,
+            # Remove lead management inputs from this crew's initialization
+        }
+    )
 
-    # Display results
-    print("\n=== RESULTS ===")
-    print(result)
-    print("===============")
+
+    result = email_crew.research_email_crew().kickoff()
+    # Return results from both crews
+    return {
+        "status": "success",
+        "result": result,
+    }
 
 
 if __name__ == "__main__":
-    main()
+    final_output = main()
+    print(f"\nFinal Output:\n{final_output}")
