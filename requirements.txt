@@ -163,3 +163,4 @@ coloredlogs~=15.0.1
 flatbuffers~=25.2.10
 jsonpatch~=1.33
 pdfplumber~=0.11.5
+flask~=3.0.2
