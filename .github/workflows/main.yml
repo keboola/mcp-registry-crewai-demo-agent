@@ -105,28 +105,9 @@ jobs:
             exit 1
           fi
 
-      - name: Delete Agent Runtime (if exists)
-        if: steps.check_runtime.outputs.exists == 'true'
-        env:
-          # Use the full agent name generated earlier
-          AGENT_NAME: ${{ steps.prep_agent_name.outputs.full_agent_name }}
-          KBC_AUTHORIZATION_TOKEN: ${{ secrets.KBC_AUTHORIZATION_TOKEN }}
-        run: |
-          echo "Deleting existing agent runtime '$AGENT_NAME'..."
-          # Use -fsS but ignore 404 if it was already gone
-          http_code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $KBC_AUTHORIZATION_TOKEN" \
-            -X DELETE \
-            "${{ env.AGENTIC_RUNTIME_API_URL }}/api/runtimes/${AGENT_NAME}")
-          if [ "$http_code" -ne 204 ] && [ "$http_code" -ne 404 ]; then
-            echo "::error::Failed to delete agent runtime '$AGENT_NAME', received HTTP status $http_code."
-            exit 1
-          else
-            echo "Existing runtime '$AGENT_NAME' deleted or already gone (HTTP $http_code)."
-            # Optional: Wait a moment for delete operation to fully settle
-            sleep 5
-          fi
-
       - name: Create Agent Runtime
+        # Only run this step if the runtime doesn't exist
+        if: steps.check_runtime.outputs.exists == 'false'
         # Create step now uses the payload generated with the full agent name
         env:
           KBC_AUTHORIZATION_TOKEN: ${{ secrets.KBC_AUTHORIZATION_TOKEN }}
@@ -163,10 +144,9 @@ jobs:
     outputs:
       full_agent_name: ${{ steps.prep_agent_name.outputs.full_agent_name }}
 
-  # --- Second Job: Trigger Kickoff Workflow --- 
+  # --- Second Job: Trigger Kickoff Workflow ---
   trigger_kickoff:
     needs: build # Depends on the build job succeeding
-    # Only run this job on pushes to the main branch
     runs-on: ubuntu-latest
     # Define CREW_INPUT_ vars needed for JSON generation
     env:
@@ -200,4 +180,55 @@ jobs:
           crew_inputs_json: ${{ steps.crew_inputs.outputs.json_string }} # Use generated JSON string
           runtime_token: ${{ secrets.KBC_AUTHORIZATION_TOKEN }} # Pass token as input
           # Pass the target crew name from variables (or default to empty)
-          target_crew_name: ${{ vars.TARGET_CREW_NAME || '' }} 
+          target_crew_name: ${{ vars.TARGET_CREW_NAME || '' }}
+
+  # --- Third Job: Cleanup PR Runtime After Merge ---
+  cleanup_pr_runtime:
+    runs-on: ubuntu-latest
+    # Trigger only when a pull request is closed
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
+    env:
+      AGENTIC_RUNTIME_API_URL: ${{ vars.AGENTIC_RUNTIME_API_URL }}
+      BASE_AGENT_NAME: ${{ vars.AGENT_NAME || 'your-lowecase-agent-name' }}
+      KBC_AUTHORIZATION_TOKEN: ${{ secrets.KBC_AUTHORIZATION_TOKEN }}
+    steps:
+      - name: Get Merged Branch Name
+        id: get_branch
+        run: echo "branch_name=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
+
+      - name: Prepare Agent Name for Merged Branch
+        id: prep_agent_name
+        env:
+          BRANCH_NAME: ${{ steps.get_branch.outputs.branch_name }}
+          # BASE_AGENT_NAME is inherited from job env
+        run: |
+          echo "Preparing agent name for merged branch: $BRANCH_NAME"
+          # Sanitize branch name: lowercase, replace / with -, remove other non-alphanumeric
+          sanitized_branch=$(echo "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed -e 's|/|-|g' -e 's|[^a-z0-9-]||g')
+          # Truncate if too long (adjust max length if needed)
+          sanitized_branch=${sanitized_branch:0:20}
+          # Construct full name
+          full_agent_name="$BASE_AGENT_NAME-$sanitized_branch"
+          echo "Agent name to delete: $full_agent_name"
+          echo "full_agent_name=$full_agent_name" >> $GITHUB_OUTPUT
+
+      - name: Delete Agent Runtime for Merged Branch
+        env:
+          # Use the full agent name generated in the previous step
+          AGENT_NAME: ${{ steps.prep_agent_name.outputs.full_agent_name }}
+          # AGENTIC_RUNTIME_API_URL & KBC_AUTHORIZATION_TOKEN are inherited from job env
+        run: |
+          echo "Attempting to delete agent runtime '$AGENT_NAME' for merged branch..."
+          # Use -fsS but ignore 404 if it was already gone
+          http_code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $KBC_AUTHORIZATION_TOKEN" \
+            -X DELETE \
+            "${{ env.AGENTIC_RUNTIME_API_URL }}/api/runtimes/${AGENT_NAME}")
+
+          if [ "$http_code" -eq 204 ]; then
+            echo "Successfully deleted agent runtime '$AGENT_NAME'."
+          elif [ "$http_code" -eq 404 ]; then
+            echo "Agent runtime '$AGENT_NAME' not found (already deleted or never existed)."
+          else
+            # Log error but don't fail the workflow for cleanup issues
+            echo "::warning::Failed to delete agent runtime '$AGENT_NAME', received HTTP status $http_code."
+          fi 

@@ -37,6 +37,23 @@ runs:
         echo "RUNTIME_TOKEN=${{ inputs.runtime_token }}" >> $GITHUB_ENV
         echo "Runtime Base URL set to: ${runtime_base_url}" # Add logging
 
+    - name: Refresh Git Repository
+      shell: bash
+      run: |
+        REFRESH_URL="${AGENT_RUNTIME_BASE_URL}/refresh-git-repo"
+        echo "Attempting to refresh git repository for agent ${{ inputs.agent_name }} at ${REFRESH_URL}..."
+        # Use --fail to exit on HTTP error >= 400
+        # Use -fsS for silent progress but show errors
+        curl -fsS --fail -X POST "${REFRESH_URL}" \
+          -H "Authorization: Bearer ${{ inputs.runtime_token }}"
+        
+        curl_exit_code=$?
+        if [ $curl_exit_code -ne 0 ]; then
+          echo "::error::Failed to refresh git repository for agent ${{ inputs.agent_name }} (curl exit code: $curl_exit_code)."
+          exit 1
+        fi
+        echo "Git repository refresh triggered successfully for agent ${{ inputs.agent_name }}."
+
     - name: Validate Agent
       shell: bash
       # Remove env block here, use GITHUB_ENV from previous step
