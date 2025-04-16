@@ -43,11 +43,18 @@ jobs:
         run: |
           # Determine the correct branch name based on the event
           if [ "$GH_EVENT_NAME" == "pull_request" ]; then
-            BRANCH_NAME="$GH_HEAD_REF"
+            BRANCH_NAME="$GH_HEAD_REF" # e.g., feature/branch-name
             echo "Event is pull_request, using head_ref: $BRANCH_NAME"
           else
-            BRANCH_NAME="$GH_REF_NAME"
-            echo "Event is $GH_EVENT_NAME, using ref_name: $BRANCH_NAME"
+            # For non-pull_request events (like push)
+            if [ "$GH_REF_NAME" == "main" ]; then
+              BRANCH_NAME="main"
+              echo "Event is $GH_EVENT_NAME to main branch, using ref_name: $BRANCH_NAME"
+            else
+              # Push to other branches, tags, etc.
+              BRANCH_NAME="$GH_REF_NAME"
+              echo "Event is $GH_EVENT_NAME to non-main ref, using ref_name: $BRANCH_NAME"
+            fi
           fi
 
           # Sanitize branch name: lowercase, replace / with -, remove other non-alphanumeric
