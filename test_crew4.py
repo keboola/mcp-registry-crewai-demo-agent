@@ -5,8 +5,8 @@ import logging
 import yaml # Need to import yaml
 import requests # Added requests
 from crewai import Agent, Crew, Process, Task
+from crewai.tools import BaseTool
 from crewai.project import CrewBase, agent, crew, task
-from crewai_tools import BaseTool # Added BaseTool
 # from langchain_openai import ChatOpenAI # Or your preferred LLM
 
 # Ensure API key is set (replace with your actual key management)

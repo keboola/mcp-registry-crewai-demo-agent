@@ -79,6 +79,7 @@ jobs:
           AGENT_DESCRIPTION: ${{ vars.AGENT_DESCRIPTION || 'Default agent description.' }}
           AGENT_ENTRYPOINT: ${{ 'test_crew4.py' }}
           # --- Pass other necessary env vars for payload generation ---
+          AGENT_SLACK_WEBHOOK_URL: ${{ secrets.AGENT_SLACK_WEBHOOK_URL }}
           AGENT_OPENAI_API_KEY: ${{ secrets.AGENT_OPENAI_API_KEY }}
           AGENT_ANTHROPIC_API_KEY: ${{ secrets.AGENT_ANTHROPIC_API_KEY }}
           AGENT_SKILL_REGISTRY_TOKEN: ${{ secrets.AGENT_SKILL_REGISTRY_TOKEN_2 }}
