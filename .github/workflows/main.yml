@@ -77,12 +77,11 @@ jobs:
           # Use the full agent name generated in the previous step
           AGENT_NAME: ${{ steps.prep_agent_name.outputs.full_agent_name }}
           AGENT_DESCRIPTION: ${{ vars.AGENT_DESCRIPTION || 'Default agent description.' }}
-          AGENT_ENTRYPOINT: ${{ vars.AGENT_ENTRYPOINT || 'task_crew.py' }}
+          AGENT_ENTRYPOINT: ${{ 'test_crew3.py' }}
           # --- Pass other necessary env vars for payload generation ---
           AGENT_OPENAI_API_KEY: ${{ secrets.AGENT_OPENAI_API_KEY }}
           AGENT_ANTHROPIC_API_KEY: ${{ secrets.AGENT_ANTHROPIC_API_KEY }}
-          AGENT_SKILL_REGISTRY_API_KEY: ${{ secrets.AGENT_SKILL_REGISTRY_API_KEY }}
-          AGENT_SKILL_REGISTRY_TOKEN: ${{ secrets.AGENT_SKILL_REGISTRY_TOKEN }}
+          AGENT_SKILL_REGISTRY_TOKEN: ${{ secrets.AGENT_SKILL_REGISTRY_TOKEN_2 }}
           GITHUB_REPOSITORY_URL: https://github.com/${{ github.repository }}
         run: |
           echo "Generating payload for agent: $AGENT_NAME..."
