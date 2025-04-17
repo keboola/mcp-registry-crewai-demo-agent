@@ -81,7 +81,6 @@ jobs:
           # --- Pass other necessary env vars for payload generation ---
           AGENT_OPENAI_API_KEY: ${{ secrets.AGENT_OPENAI_API_KEY }}
           AGENT_ANTHROPIC_API_KEY: ${{ secrets.AGENT_ANTHROPIC_API_KEY }}
-          AGENT_SKILL_REGISTRY_API_KEY: ${{ secrets.AGENT_SKILL_REGISTRY_API_KEY }}
           AGENT_SKILL_REGISTRY_TOKEN: ${{ secrets.AGENT_SKILL_REGISTRY_TOKEN_2 }}
           GITHUB_REPOSITORY_URL: https://github.com/${{ github.repository }}
         run: |

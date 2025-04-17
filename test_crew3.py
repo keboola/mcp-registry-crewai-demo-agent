@@ -15,18 +15,22 @@ logger = logging.getLogger(__name__)
 @CrewBase
 class ComponentDocumentationCrew:
     """
-    Crew responsible for monitoring component documentation changes and generating changelogs.
-    It analyzes Git history and Readme.md files in specified repositories.
+    Crew responsible for generating documentation updates based on changes
+    between specific commits within a branch (`ref`). It analyzes Git history
+    and Readme.md files based on 'before' and 'after' commit hashes provided.
     """
 
     def __init__(self, inputs=None):
         """
         Initialize the ComponentDocumentationCrew.
-        It connects to MCP to access necessary tools (like GitHub tools).
+        Connects to MCP to access necessary tools (like GitHub/Git tools).
 
         Args:
-            inputs (dict, optional): A dictionary for potential future configurations.
-                                     Defaults to None.
+            inputs (dict, optional): A dictionary for potential future static
+                                     configurations. Runtime inputs like 'ref',
+                                     'before', 'after', and 'repository_url'
+                                     are expected to be passed during the
+                                     `kickoff` method. Defaults to None.
         """
 
         skill_registry_token = os.getenv("SKILL_REGISTRY_TOKEN")
@@ -102,108 +106,176 @@ class ComponentDocumentationCrew:
 
 
     @agent
-    def documentation_research_agent(self) -> Agent:
+    def repository_discovery_agent(self) -> Agent:
         """
-        Defines the agent responsible for researching documentation changes across multiple repositories.
+        Defines the agent responsible for discovering or verifying repositories using available tools.
+        It understands how to handle paginated results from repository listing tools.
 
         Returns:
-            Agent: An instance of the documentation research agent.
+            Agent: An instance of the repository discovery agent.
         """
         return Agent(
-            role="Component Documentation Analyst",
-            goal="Discover component repositories, analyze documentation changes in their PRs/branches by comparing Readme.md files, and generate an aggregated changelog.",
-            backstory="An expert agent specializing in analyzing Git repositories and Readme files across an organization to track documentation updates meticulously.",
+            role="Repository Discovery Specialist",
+            goal=(
+                "Utilize provided tools (e.g., GitHub API tools via MCP) to find or verify specific component repositories. "
+                "If listing repositories, efficiently handle pagination: make the first request without a 'page' parameter, "
+                "then, if more results exist, iterate using 'page=1', 'page=2', etc. (up to a limit of 10 pages), always using 'per_page=100'."
+            ),
+            backstory=(
+                "An expert in navigating code hosting platforms via APIs. Skilled in searching, filtering, and handling large lists of repositories systematically, "
+                "paying close attention to API limits and pagination requirements."
+            ),
             verbose=True,
-            # Tools are loaded from the MCP connection (expected to include GitHub/Git tools)
-            tools=self.mcp_tools or [], # Use empty list if no tools loaded
+            tools=self.mcp_tools or [],
+        )
+
+    @agent
+    def documentation_analysis_agent(self) -> Agent:
+        """
+        Defines the agent responsible for analyzing documentation changes between two specific commits *for a verified repository*.
+
+        Returns:
+            Agent: An instance of the documentation analysis agent.
+        """
+        return Agent(
+            role="Documentation Change Analyst",
+            goal="Analyze the changes in README.md between two specific commits (`before` and `after`) within a given branch (`ref`) for a *specific, verified* repository, and generate a concise changelog entry.",
+            backstory="An expert agent focused on pinpointing documentation modifications within Git history for a known repository. It precisely compares file versions between commits to generate accurate documentation updates.",
+            verbose=True,
+            tools=self.mcp_tools or [],
         )
 
     @task
-    def component_documentation_task(self) -> Task:
+    def repository_verification_task(self) -> Task:
         """
-        Creates the task for discovering repositories, analyzing documentation changes in their PRs,
-        and generating an aggregated changelog.
+        Creates the task for verifying the target repository provided via kickoff inputs.
+        While this agent *can* list repositories with pagination, this task focuses on the single repo.
 
         Returns:
-            Task: An instance of the documentation analysis task.
+            Task: An instance of the repository verification task.
         """
-        # No longer requires repository_url input
-        logger.info(f"Creating documentation task with inputs: {self.inputs}")
-
-        # Updated step-by-step description for the agent
+        logger.info("Creating repository verification task. Inputs expected via kickoff.")
         task_description = f"""
-Analyze documentation changes in `Readme.md` across multiple component repositories and generate an aggregated changelog. Follow these steps:
+Verify the existence and accessibility of the component repository specified by the input `repository_url`: {{repository_url}}.
 
-1.  **Discover Repositories:** Use available tools (e.g., a GitHub tool) to list all accessible component repositories. Filter or identify repositories designated as 'components' if possible based on naming conventions or available metadata.
-2.  **Iterate Through Repositories:** For each identified component repository:
-    a. **Identify Relevant PRs/Branches:** Use tools to list open Pull Requests (PRs) or recently updated feature branches (e.g., updated in the last week). You might need to define 'relevant' based on common branch naming patterns (like 'feature/...').
-    b. **Iterate Through PRs/Branches:** For each relevant PR or branch found in the repository:
-        i.  **Get Base Readme.md:** Retrieve the content of the `Readme.md` file from the main/master branch of the repository.
-        ii. **Get PR/Branch Readme.md:** Retrieve the content of the `Readme.md` file from the specific PR or feature branch.
-        iii.**Compare Documentation:** Use available tools (e.g., a diff tool or function) to compare the content of the PR/branch `Readme.md` against the base (main/master) `Readme.md`.
-        iv. **Analyze Changes:** If differences are found:
-            *   Carefully examine the differences ('diff').
-            *   Identify the sections added, modified, or deleted.
-            *   Focus on understanding the *meaning* of the documentation changes.
-        v.  **Generate Changelog Entry (if changed):**
-            *   If changes were found, create a concise, human-readable changelog entry specific to this PR/branch and repository.
-            *   Include the repository name and PR/branch name in the entry.
-            *   Example: "[Repo: my-component | PR: #123] - Updated installation instructions."
-            *   Store this entry.
-3.  **Aggregate Changelog:** Combine all the generated changelog entries from the different repositories and PRs/branches into a single report.
-4.  **Output:**
-    *   Provide the aggregated changelog report as the final answer.
-    *   If no documentation changes were found across any repositories/PRs, state clearly: "No significant documentation changes found in Readme.md files for observed repositories and PRs/branches."
-5.  **Tool Usage:** You MUST use the provided tools for discovering repositories, listing PRs/branches, fetching file contents (Readme.md from different branches), and potentially comparing files. Follow tool instructions carefully.
+1.  **Input:** The repository URL is: {{repository_url}}
+2.  **Action:** Use available tools (e.g., a GitHub 'get repository details' tool) using the specific repository URL '{{repository_url}}' provided as input to confirm that the repository exists and is accessible.
+3.  **Output:**
+    *   If successful, confirm the repository '{{repository_url}}' is valid. You might output basic details like the full name or ID as context for the next step.
+    *   If the repository cannot be found or accessed, report the error clearly, mentioning '{{repository_url}}'.
+4.  **Tool Usage:** You MUST use the provided tools to interact with the repository source (e.g., GitHub), applying them to the given repository URL: '{{repository_url}}'.
+    **Important:** When calling any tool, ensure you do not include a `properties` field in the tool's input arguments.
 """
-# Note: True HITL might require specific callbacks or manager agents depending on CrewAI version and desired interaction points.
-# This task currently relies on the agent's ability to follow instructions and use tools for discovery and comparison.
+        return Task(
+            description=task_description,
+            agent=self.repository_discovery_agent(),
+            expected_output="Confirmation that the repository specified in `repository_url` (e.g., {repository_url}) is valid and accessible, potentially including basic identifying information, or an error message if not."
+        )
+
+    @task
+    def documentation_analysis_task(self) -> Task:
+        """
+        Creates the task for analyzing documentation changes between specific commits
+        in the repository verified by the previous task.
+
+        Returns:
+            Task: An instance of the documentation analysis task for specific commits.
+        """
+        logger.info("Creating documentation analysis task. Depends on repository verification task.")
+
+        task_description = f"""
+Analyze documentation changes in `README.md` between two specific commits within a given branch (`ref`) for the specific repository confirmed in the previous step.
+
+You will use the following inputs provided via the kickoff method:
+- Repository URL: {{repository_url}}
+- Branch/Ref: {{ref}}
+- Before Commit: {{before}}
+- After Commit: {{after}}
+
+Follow these steps:
+
+1.  **Context:** Acknowledge the repository '{{repository_url}}' has been verified by the previous task.
+2.  **Fetch `README.md` at 'before' commit:** Use available Git tools to retrieve the *exact* content of the `README.md` file as it existed at the commit hash '{{before}}' within the repository '{{repository_url}}'. Handle cases where the file might not exist at this commit.
+3.  **Fetch `README.md` at 'after' commit:** Use available Git tools to retrieve the *exact* content of the `README.md` file as it existed at the commit hash '{{after}}' within the repository '{{repository_url}}'. Handle cases where the file might not exist at this commit.
+4.  **Compare Documentation:**
+    *   If `README.md` exists in both commits ('{{before}}' and '{{after}}'), use available tools (e.g., a diff tool or function) to compare the content from the '{{after}}' commit against the content from the '{{before}}' commit for the repository '{{repository_url}}'.
+    *   If `README.md` was created in the '{{after}}' commit (didn't exist in '{{before}}'), note this as a creation event for '{{repository_url}}'.
+    *   If `README.md` was deleted (existed in '{{before}}', not in '{{after}}'), note this as a deletion event for '{{repository_url}}'.
+5.  **Analyze Changes:**
+    *   If differences are found (or creation/deletion occurred between '{{before}}' and '{{after}}'):
+        *   Carefully examine the differences ('diff').
+        *   Identify the sections added, modified, or deleted.
+        *   Focus on summarizing the *meaning* of the documentation changes concisely.
+6.  **Generate Changelog Entry:**
+    *   Based on the analysis, create a single, concise, human-readable changelog entry describing the documentation update for repository '{{repository_url}}' on ref '{{ref}}'.
+    *   Mention the `ref` ('{{ref}}') if helpful.
+    *   Example: "[{{ref}}] Updated installation instructions in README.md."
+    *   Example: "[{{ref}}] Added initial README.md."
+    *   Example: "[{{ref}}] Removed outdated section from README.md."
+7.  **Output:**
+    *   Provide the generated changelog entry as the final answer.
+    *   If no changes were detected between commit '{{before}}' and commit '{{after}}' for `README.md` in repository '{{repository_url}}' on ref '{{ref}}', state clearly: "No changes found in README.md between commit {{before}} and {{after}} on ref {{ref}} for repository {{repository_url}}."
+8.  **Tool Usage:** You MUST use the provided tools for fetching file contents at specific commits ('{{before}}', '{{after}}') and potentially comparing files within the context of the repository '{{repository_url}}'. Follow tool instructions carefully.
+"""
 
         return Task(
             description=task_description,
-            agent=self.documentation_research_agent(),
-            expected_output="An aggregated changelog report summarizing Readme.md changes across relevant repositories and their PRs/branches, or a confirmation that no changes were found.",
+            agent=self.documentation_analysis_agent(),
+            expected_output="A concise changelog entry summarizing the changes in README.md between the 'before' ({before}) and 'after' ({after}) commits for the given 'ref' ({ref}) and 'repository_url' ({repository_url}), or a confirmation that no changes were found.",
+            context=[self.repository_verification_task()]
         )
 
     @crew
     def component_documentation_crew(self) -> Crew:
         """
-        Creates and configures the Component Documentation Crew.
+        Creates and configures the Component Documentation Crew using a two-step process:
+        1. Verify the repository.
+        2. Analyze documentation changes within that repository.
 
         Returns:
             Crew: An instance of the Component Documentation Crew.
         """
-        logger.info(f"Initializing Component Documentation Crew with inputs: {self.inputs}")
+        logger.info(f"Initializing Component Documentation Crew with verification and analysis steps.")
         return Crew(
-            agents=[self.documentation_research_agent()],
-            tasks=[self.component_documentation_task()],
+            agents=[
+                self.repository_discovery_agent(),
+                self.documentation_analysis_agent()
+                ],
+            tasks=[
+                self.repository_verification_task(),
+                self.documentation_analysis_task()
+                ],
             verbose=True,
-            # Using sequential process for this single-agent, single-task flow.
-            # For more complex scenarios or explicit HITL control points,
-            # consider Process.hierarchical with a manager_llm or custom callbacks.
             process=Process.sequential,
         )
 
 # Example usage (optional, for testing)
-# if __name__ == "__main__":
-#     # Load environment variables (e.g., from .env file)
-#     # from dotenv import load_dotenv
-#     # load_dotenv()
-#
-#     print("## Component Documentation Crew Example")
-#     # Inputs might be empty or used for other configs in the future
-#     inputs = {}
-#
-#     try:
-#         doc_crew = ComponentDocumentationCrew(inputs=inputs)
-#         # Kickoff no longer needs specific repo URL in inputs for the task itself
-#         result = doc_crew.component_documentation_crew().kickoff(inputs=inputs)
-#         print("\n\n########################")
-#         print("## Crew Final Result:")
-#         print("########################")
-#         print(result)
-#     except ValueError as e:
-#         print(f"Error initializing or running crew: {e}")
-#     except Exception as e:
-#         print(f"An unexpected error occurred: {e}")
-#         logger.exception("Unexpected error during crew execution:") 
+if __name__ == "__main__":
+    # Load environment variables (e.g., from .env file)
+    # from dotenv import load_dotenv
+    # load_dotenv()
+
+    print("## Component Documentation Crew Example (Specific Commit)")
+    # Example inputs mimicking a GitHub webhook payload structure
+    # These would normally come from the webhook event
+    kickoff_inputs = {
+        'repository_url': 'your_org/your_component_repo', # Replace with actual repo identifier/URL
+        'ref': 'refs/heads/feature/update-docs',           # Example branch ref
+        'before': 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0', # Example 'before' commit hash
+        'after': 'f0e9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3b2a1'  # Example 'after' commit hash
+    }
+
+    try:
+        # Pass static inputs if any during crew class initialization (here, none needed)
+        doc_crew = ComponentDocumentationCrew()
+        # Pass the specific commit/ref info during kickoff
+        result = doc_crew.component_documentation_crew().kickoff(inputs=kickoff_inputs)
+        print("\n\n########################")
+        print("## Crew Final Result:")
+        print("########################")
+        print(result)
+    except ValueError as e:
+        print(f"Error initializing or running crew: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        logger.exception("Unexpected error during crew execution:") 

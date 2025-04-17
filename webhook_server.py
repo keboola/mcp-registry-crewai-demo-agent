@@ -47,8 +47,8 @@ def verify_signature(payload_body, signature_header):
 
     return True
 
-def trigger_crew_kickoff():
-    """Sends a POST request to the CrewAI kickoff endpoint."""
+def trigger_crew_kickoff(repo_url: str, ref: str, before: str, after: str):
+    """Sends a POST request to the CrewAI kickoff endpoint with specific inputs."""
     if not KICKOFF_TOKEN:
         app.logger.error("KICKOFF_TOKEN is not set. Cannot trigger crew kickoff.")
         return False, "Kickoff token not configured on server."
@@ -58,17 +58,21 @@ def trigger_crew_kickoff():
         'Authorization': f'Bearer {KICKOFF_TOKEN}',
         'Content-Type': 'application/json'
     }
+    # Include the specific details extracted from the webhook in the inputs
     payload = {
         "crew": KICKOFF_CREW_NAME,
         "inputs": {
-            "verbose": True
-            # Add other inputs needed by your crew, possibly derived from the webhook
+            "repository_url": repo_url,
+            "ref": ref,
+            "before": before,
+            "after": after,
+            "verbose": True # Keep other necessary inputs
         },
         "wait": False # Set to true if you need the webhook to wait for completion
     }
 
     try:
-        app.logger.info(f"Sending kickoff request to {KICKOFF_URL} for crew {KICKOFF_CREW_NAME}")
+        app.logger.info(f"Sending kickoff request to {KICKOFF_URL} for crew {KICKOFF_CREW_NAME} with inputs: {{ref: {ref}, before: {before[:7]}..., after: {after[:7]}..., repo: {repo_url}}}")
         response = requests.post(KICKOFF_URL, headers=headers, json=payload, timeout=30) # Added timeout
         response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
         app.logger.info(f"Kickoff request successful. Status: {response.status_code}, Response: {response.text[:200]}...") # Log snippet of response
@@ -125,14 +129,38 @@ def handle_github_webhook():
     # --- Trigger Logic (Example: Trigger on 'push' events) ---
     # Modify this logic based on which GitHub events should trigger the crew
     if event_type == 'push':
-        app.logger.info(f"Detected '{event_type}' event. Triggering crew kickoff...")
-        # Optionally, you could extract info like repository name, branch, committer from 'payload'
-        # and pass it as 'inputs' to the crew kickoff.
-        success, result = trigger_crew_kickoff()
-        if success:
-            return jsonify({"status": "success", "message": "Crew kickoff triggered", "kickoff_response": result}), 200
-        else:
-            return jsonify({"status": "error", "message": "Failed to trigger crew kickoff", "details": result}), 500
+        # Extract necessary information for the crew
+        try:
+            ref = payload['ref']
+            before_commit = payload['before']
+            after_commit = payload['after']
+            # Use html_url as it's usually present and user-friendly
+            repo_url = payload['repository']['html_url']
+            # Add check for non-zero commits
+            if before_commit == '0000000000000000000000000000000000000000' or after_commit == '0000000000000000000000000000000000000000':
+                app.logger.info(f"Ignoring push event for new/deleted branch ({ref}) with zero commit hash.")
+                return jsonify({"status": "ignored", "message": "Ignoring push event for new/deleted branch."}), 200
+
+            app.logger.info(f"Detected 'push' event on ref '{ref}'. Triggering crew kickoff for commits {before_commit[:7]}..{after_commit[:7]} in repo {repo_url}")
+
+            success, result = trigger_crew_kickoff(
+                repo_url=repo_url,
+                ref=ref,
+                before=before_commit,
+                after=after_commit
+            )
+
+            if success:
+                return jsonify({"status": "success", "message": "Crew kickoff triggered", "kickoff_response": result}), 200
+            else:
+                return jsonify({"status": "error", "message": "Failed to trigger crew kickoff", "details": result}), 500
+        except KeyError as e:
+            app.logger.error(f"Missing expected key in 'push' event payload: {e}")
+            return jsonify({"status": "error", "message": f"Invalid 'push' payload structure, missing key: {e}"}), 400
+        except Exception as e:
+            # Catch unexpected errors during extraction or triggering
+            app.logger.exception(f"Unexpected error processing 'push' event: {e}")
+            return jsonify({"status": "error", "message": f"An unexpected error occurred: {e}"}), 500
     elif event_type == 'ping':
          # GitHub sends a 'ping' event when you first set up the webhook
          app.logger.info("Received 'ping' event. Webhook configured successfully.")
@@ -149,6 +177,6 @@ if __name__ == '__main__':
     # Change port if 5000 is already in use
     # Set debug=False for production environments
     host = os.environ.get("HOST", "0.0.0.0")
-    port = int(os.environ.get("PORT", 5001)) # Use a different port than default 5000 if needed
+    port = int(os.environ.get("PORT", 8888)) # Use a different port than default 5000 if needed
     debug_mode = os.environ.get("FLASK_DEBUG", "False").lower() == "true"
     app.run(host=host, port=port, debug=debug_mode) 
