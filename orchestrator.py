@@ -81,7 +81,7 @@ class LeadManagementCrew:
 
         self.llm = LLM(
             model="openai/gpt-4o",  # call model by provider/model_name
-            temperature=0.1
+            temperature=0.0
         )
 
     def __del__(self):

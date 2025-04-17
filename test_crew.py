@@ -2,8 +2,7 @@ import os
 
 from dotenv import load_dotenv
 
-# Import both crew classes
-from orchestrator import  EmailResearchCrew
+from orchestrator import LeadManagementCrew
 
 
 def main():
@@ -21,32 +20,26 @@ def main():
             "SKILL_REGISTRY_TOKEN is not set. Add it to your .env file."
         )
 
-    # --- Inputs for Email Research Crew ---
-    researcher_name_for_email = "Radek Tomasek" # Example name for email search
-    researcher_email_fallback = "martin.vasko@keboola.com" # Example fallback email
-    message_for_email = "Hello, I am interested in your latest publication on AI ethics. Could we connect?" # Example message
+    # Sample sales note - you can replace this with user input or data from another source
+    sample_note = """
+    Had a great meeting with John Smith (john.smith+dev1@example.com) today. 
+    He's interested in our enterprise solution for his company. 
+    The opportunity is for a full platform implementation worth about $75,000.
+    Will follow up next week to discuss details.
+    """
 
+    # Initialize the crew with the sample note
+    crew = LeadManagementCrew(inputs={"note": sample_note})
 
-    # --- Initialize Email Research Crew ---
-    print("Initializing Email Research Crew...")
-    email_crew = EmailResearchCrew(
-         inputs={
-            "researcher_name": researcher_name_for_email,
-            "researcher_email": researcher_email_fallback,
-            "message": message_for_email,
-            # Remove lead management inputs from this crew's initialization
-        }
-    )
+    # Run the crew
+    print("Starting Lead Management process...")
+    result = crew.lead_management_crew().kickoff()
 
-
-    result = email_crew.research_email_crew().kickoff()
-    # Return results from both crews
-    return {
-        "status": "success",
-        "result": result,
-    }
+    # Display results
+    print("\n=== RESULTS ===")
+    print(result)
+    print("===============")
 
 
 if __name__ == "__main__":
-    final_output = main()
-    print(f"\nFinal Output:\n{final_output}")
+    main()
