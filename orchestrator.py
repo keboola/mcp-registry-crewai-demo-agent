@@ -5,6 +5,7 @@ from typing import Any, Dict
 
 from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
+from crewai_tools import CodeInterpreterTool
 from mcp import StdioServerParameters
 from mcpadapt.core import MCPAdapt
 from mcpadapt.crewai_adapter import CrewAIAdapter
@@ -133,6 +134,61 @@ class EmailResearchCrew:
             process=Process.sequential,
         )
 
+@CrewBase
+class CodeExecutionCrew:
+    """Crew for executing Python code using CodeInterpreterTool"""
+
+    def __init__(self, inputs=None):
+        """Initialize the crew with inputs"""
+        self.inputs = inputs or {}
+        
+        # Set the Docker socket path for macOS
+        os.environ['DOCKER_HOST'] = f'unix://{os.path.expanduser("~/.docker/run/docker.sock")}'
+        
+        # Initialize the code interpreter tool
+        self.code_interpreter = CodeInterpreterTool()
+        logger.info(f"CodeExecutionCrew initialized with inputs: {self.inputs}")
+
+    @agent
+    def programmer_agent(self) -> Agent:
+        return Agent(
+            role="Python Programmer",
+            goal="Write and execute Python code to solve problems",
+            backstory="An expert Python programmer who writes efficient code.",
+            tools=[self.code_interpreter],
+            verbose=True
+        )
+
+    @task
+    def code_execution_task(self) -> Task:
+        """Creates a task for code execution"""
+        # Get code description from inputs or use default
+        code_description = self.inputs.get(
+            "code_description",
+            "Write a Python function to calculate the Fibonacci sequence up to the 10th number and print the result."
+        )
+        expected_output = self.inputs.get(
+            "expected_output",
+            "A list containing the first 10 numbers of the Fibonacci sequence"
+        )
+
+        return Task(
+            description=code_description,
+            expected_output=expected_output,
+            agent=self.programmer_agent()
+        )
+
+    @crew
+    def code_execution_crew(self) -> Crew:
+        """Creates the code execution crew"""
+        logger.info(f"Initializing code execution crew with inputs: {self.inputs}")
+
+        return Crew(
+            agents=[self.programmer_agent()],
+            tasks=[self.code_execution_task()],
+            verbose=True,
+            process=Process.sequential
+        )
 
 def get_status() -> Dict[str, Any]:
     """
