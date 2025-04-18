@@ -42,3 +42,4 @@ Thumbs.db
 .streamlit/
 
 .ruff_cache/
+db/

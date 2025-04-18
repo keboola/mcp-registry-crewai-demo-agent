@@ -35,7 +35,7 @@ jobs:
       - name: Prepare Branch-Specific Agent Name
         id: prep_agent_name
         env:
-          BASE_AGENT_NAME: ${{ vars.AGENT_NAME || 'your-lowecase-agent-name' }}
+          BASE_AGENT_NAME: ${{ 'code-execution' }}
           # Pass both refs and event name
           GH_REF_NAME: ${{ github.ref_name }}
           GH_HEAD_REF: ${{ github.head_ref }}
@@ -76,8 +76,8 @@ jobs:
         env:
           # Use the full agent name generated in the previous step
           AGENT_NAME: ${{ steps.prep_agent_name.outputs.full_agent_name }}
-          AGENT_DESCRIPTION: ${{ vars.AGENT_DESCRIPTION || 'Default agent description.' }}
-          AGENT_ENTRYPOINT: ${{ 'test_crew4.py' }}
+          AGENT_DESCRIPTION: ${{ vars.AGENT_DESCRIPTION || 'Code interpreter.' }}
+          AGENT_ENTRYPOINT: ${{ 'test_crew_code_exection.py' }}
           # --- Pass other necessary env vars for payload generation ---
           AGENT_SLACK_WEBHOOK_URL: ${{ secrets.AGENT_SLACK_WEBHOOK_URL }}
           AGENT_OPENAI_API_KEY: ${{ secrets.AGENT_OPENAI_API_KEY }}
